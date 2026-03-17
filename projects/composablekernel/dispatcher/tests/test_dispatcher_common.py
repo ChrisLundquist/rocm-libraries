@@ -333,5 +333,50 @@ class TestCleanup(unittest.TestCase):
         cleanup_generated_kernels(Path("/tmp/nonexistent_ck_test_dir_12345"))
 
 
+class TestFmhaGfx12Config(unittest.TestCase):
+    """Tests for FMHA spec_to_config gfx12 warp tile overrides."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            sys.path.insert(0, str(DISPATCHER_DIR / "python"))
+            from fmha_utils import FmhaKernelSpec, spec_to_config
+            cls.FmhaKernelSpec = FmhaKernelSpec
+            cls.spec_to_config = spec_to_config
+            cls.available = True
+        except ImportError:
+            cls.available = False
+
+    def setUp(self):
+        if not self.available:
+            self.skipTest("fmha_utils not available")
+
+    def _make_config(self, arch):
+        spec = self.__class__.FmhaKernelSpec(
+            name="test", hdim=128, pipeline="qr",
+            tile_m0=64, tile_n0=64, tile_k0=32,
+        )
+        return self.__class__.spec_to_config(spec, "fp16", arch)
+
+    def test_gfx1201_warp_tiles_16x16x16(self):
+        """gfx12 must use 16x16x16 WMMA tiles, not 32x32x16."""
+        config = self._make_config("gfx1201")
+        self.assertEqual((config.warp_m0, config.warp_n0, config.warp_k0), (16, 16, 16))
+        self.assertEqual((config.warp_m1, config.warp_n1, config.warp_k1), (16, 16, 16))
+
+    def test_gfx1201_wave_config_matches_ck_examples(self):
+        """gfx12 wave config must be (4,1,1) — matching CK tile FMHA examples (PR #2528)."""
+        config = self._make_config("gfx1201")
+        wave = (config.wave_m0, config.wave_n0, config.wave_k0)
+        self.assertEqual(wave, (4, 1, 1),
+            f"gfx12 wave config {wave} doesn't match CK examples (4,1,1)")
+
+    def test_gfx942_defaults_unchanged(self):
+        """gfx942 should still use 32x32x16 warp tiles and (4,1,1) wave."""
+        config = self._make_config("gfx942")
+        self.assertEqual((config.warp_m0, config.warp_n0, config.warp_k0), (32, 32, 16))
+        self.assertEqual((config.wave_m0, config.wave_n0, config.wave_k0), (4, 1, 1))
+
+
 if __name__ == "__main__":
     unittest.main()
